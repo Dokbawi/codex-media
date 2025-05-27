@@ -3,6 +3,8 @@
 /node_modules
 /build
 /env
+/video-processing
+ffmpeg2pass*
 
 # Logs
 logs

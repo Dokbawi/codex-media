@@ -30,10 +30,11 @@ export class VideoService {
     routingKey: 'video.processing',
     queue: 'video.processing.queue',
   })
-  async handleVideoProcessRequest(msg: VideoUploadDto) {
+  async handleVideoProcessRequest(msg: any) {
     this.logger.log(`영상 처리 요청 수신: ${JSON.stringify(msg)}`);
 
-    const { callbackQueue, senderId, serverId, videoUrl, channelId } = msg;
+    const { callbackQueue, senderId, serverId, videoUrl, channelId } =
+      msg.data as VideoUploadDto;
     const response = {
       videoId: `video_${Date.now()}`,
       success: false,
@@ -45,14 +46,16 @@ export class VideoService {
 
     try {
       const bucketName = 'bucket-video-winter-cat';
-      const tempFileName = `temp_${Date.now()}`;
+      const tempFileName = `temp_${Date.now()}.mp4`;
       const localTempPath = path.join(this.processingDir, tempFileName);
       const localOutPutTempPath = path.join(
         this.processingDir,
         `output_${tempFileName}`,
       );
 
-      const res = await axios.get(videoUrl, { responseType: 'arraybuffer' });
+      const res = await axios.get(videoUrl.trim(), {
+        responseType: 'arraybuffer',
+      });
       await fs.writeFile(localTempPath, Buffer.from(res.data));
 
       this.logger.log(`임시 파일 다운로드 완료: ${localTempPath}`);
@@ -69,7 +72,10 @@ export class VideoService {
 
       try {
         await fs.unlink(upscaledVideoPath);
-        this.logger.log(`로컬 임시 파일 삭제 완료: ${upscaledVideoPath}`);
+        await fs.unlink(localTempPath);
+        this.logger.log(
+          `로컬 임시 파일 삭제 완료: ${upscaledVideoPath} ${localTempPath}`,
+        );
       } catch (err) {
         this.logger.error(`로컬 임시 파일 삭제 실패: ${err.message}`);
       }

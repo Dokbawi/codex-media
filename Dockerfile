@@ -8,7 +8,7 @@ RUN apt-get update && \
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+RUN npm install --force
 
 COPY . .
 
@@ -16,4 +16,4 @@ RUN npm run build
 
 RUN mkdir -p /app/processing
 
-CMD ["node", "dist/main"]
+CMD ["npm", "run", "start:prod"]

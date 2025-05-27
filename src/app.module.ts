@@ -5,13 +5,6 @@ import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
 import { VideoService } from './video/video.service';
 
 @Module({
-  imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: `env/development.env`,
-    }),
-
-    VideoModule,
-  ],
+  imports: [VideoModule],
 })
 export class AppModule {}
