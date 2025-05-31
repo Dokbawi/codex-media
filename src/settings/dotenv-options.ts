@@ -1,7 +1,8 @@
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 
-const env = process.env.NODE_ENV?.trim() === 'prod' ? 'prod' : 'development';
+const env =
+  process.env.NODE_ENV?.trim() === 'production' ? 'production' : 'development';
 const filePath = path.join(process.cwd(), `env/${env}.env`);
 console.log(`Environment ${env}`);
 
