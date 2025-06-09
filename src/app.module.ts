@@ -1,10 +1,17 @@
-import { Global, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { VideoModule } from './video/video.module';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
-import { VideoService } from './video/video.service';
+import { mognoDBConfig } from './settings/dotenv-options';
+import { MongooseModule } from '@nestjs/mongoose';
 
 @Module({
-  imports: [VideoModule],
+  imports: [
+    MongooseModule.forRoot(
+      `mongodb://${mognoDBConfig.user}:${mognoDBConfig.password}@localhost:27017`,
+      {
+        dbName: mognoDBConfig.dbName,
+      },
+    ),
+    VideoModule,
+  ],
 })
 export class AppModule {}

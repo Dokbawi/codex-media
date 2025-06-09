@@ -15,3 +15,9 @@ dotenv.config(dotEnvOptions);
 export const rabbitMQConfig = {
   url: process.env.RABBITMQ_URL,
 };
+
+export const mognoDBConfig = {
+  user: process.env.MONGODB_ADMIN_USER,
+  password: process.env.MONGODB_ADMIN_PASSWORD,
+  dbName: process.env.MONGODB_NAME,
+};
