@@ -1,0 +1,177 @@
+name: Build and Deploy to ECR
+
+on:
+  push:
+    branches: [main, master]
+
+env:
+  AWS_REGION: ap-southeast-2
+  ECR_REPOSITORY: winter-cat
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      image-tag: ${{ steps.tag.outputs.tag }}
+      image-uri: ${{ steps.build.outputs.image-uri }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create config-prod.json
+        run: |
+          mkdir env
+          echo '${{ secrets.PRODUCTION_ENV }}' > ./env/production.env
+
+      - name: Generate unique image tag
+        id: tag
+        run: |
+          TAG="v$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Generated tag: ${TAG}"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          SERVICE_NAME: ${{ github.event.repository.name }}
+        run: |
+          # Build a docker container and push it to ECR with namespace structure
+          FULL_IMAGE_NAME="$ECR_REGISTRY/$ECR_REPOSITORY/$SERVICE_NAME:$IMAGE_TAG"
+          LATEST_IMAGE_NAME="$ECR_REGISTRY/$ECR_REPOSITORY/$SERVICE_NAME:latest"
+
+          docker build -t $FULL_IMAGE_NAME .
+          docker push $FULL_IMAGE_NAME
+
+          # Tag as latest for each service
+          docker tag $FULL_IMAGE_NAME $LATEST_IMAGE_NAME
+          docker push $LATEST_IMAGE_NAME
+
+          echo "image-uri=$FULL_IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "Image pushed: $FULL_IMAGE_NAME"
+
+  update-helm-chart:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production # Environment secrets 사용
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Update Helm Chart
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          # Helm Charts 레포지토리 클론
+          git clone https://${{ secrets.HELM_REPO_TOKEN }}@github.com/${{ secrets.HELM_REPO }}.git helm-repo
+          cd helm-repo
+
+          SERVICE_NAME="${{ github.event.repository.name }}"
+          NEW_TAG="${{ needs.build.outputs.image-tag }}"
+          NEW_REPOSITORY="${ECR_REGISTRY}/winter-cat/${SERVICE_NAME}"
+
+          # values.yaml에서 해당 서비스의 repository와 tag 업데이트
+          case $SERVICE_NAME in
+            "discord-bot")
+              sed -i "/discordBot:/,/pullPolicy:/ {
+                s|repository: .*|repository: ${NEW_REPOSITORY}|
+                s|tag: .*|tag: ${{ needs.build.outputs.image-tag }}|
+              }" values.yaml
+              ;;
+            "winter-cat-video")
+              sed -i "/winterCatVideo:/,/pullPolicy:/ {
+                s|repository: .*|repository: ${NEW_REPOSITORY}|
+                s|tag: .*|tag: ${{ needs.build.outputs.image-tag }}|
+              }" values.yaml
+              ;;
+            "codex-media")
+              sed -i "/codexMedia:/,/pullPolicy:/ {
+                s|repository: .*|repository: ${NEW_REPOSITORY}|
+                s|tag: .*|tag: ${{ needs.build.outputs.image-tag }}|
+              }" values.yaml
+              ;;
+          esac
+
+          # Chart.yaml 버전 업데이트
+          CHART_VERSION="0.1.$(date +%Y%m%d%H%M%S)"
+          sed -i "s|version: .*|version: ${CHART_VERSION}|g" Chart.yaml
+          sed -i "s|appVersion: .*|appVersion: \"${NEW_TAG}\"|g" Chart.yaml
+
+          # Git 커밋
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Update ${SERVICE_NAME} to ${NEW_TAG}
+
+          - ECR Repository: ${NEW_REPOSITORY}
+          - Image Tag: ${SERVICE_NAME}-${NEW_TAG}
+          - Commit: ${{ github.sha }}" || exit 0
+          git push
+
+          echo "✅ Updated ${SERVICE_NAME} to ${SERVICE_NAME}-${NEW_TAG}"
+
+  notify:
+    needs: [build, update-helm-chart]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Discord success notification
+        if: needs.build.result == 'success' && needs.update-helm-chart.result == 'success'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -d "{
+                 \"embeds\": [{
+                   \"title\": \"✅ ECR 배포 성공: ${{ github.event.repository.name }}\",
+                   \"description\": \"새 이미지가 winter-cat ECR에 푸시되고 Helm 차트가 업데이트되었습니다.\",
+                   \"color\": 5763719,
+                   \"fields\": [
+                     {\"name\": \"🏷️ 이미지 태그\", \"value\": \"\`${{ github.event.repository.name }}-${{ needs.build.outputs.image-tag }}\`\", \"inline\": true},
+                     {\"name\": \"📦 ECR URI\", \"value\": \"\`${{ needs.build.outputs.image-uri }}\`\", \"inline\": false},
+                     {\"name\": \"📝 커밋\", \"value\": \"\`${{ github.sha }}\`\", \"inline\": true},
+                     {\"name\": \"👤 작성자\", \"value\": \"${{ github.actor }}\", \"inline\": true}
+                   ]
+                 }]
+               }" \
+               ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+      - name: Discord failure notification
+        if: needs.build.result == 'failure' || needs.update-helm-chart.result == 'failure'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -d "{
+                 \"embeds\": [{
+                   \"title\": \"❌ ECR 배포 실패: ${{ github.event.repository.name }}\",
+                   \"description\": \"winter-cat ECR 이미지 빌드 또는 Helm 차트 업데이트에 실패했습니다.\",
+                   \"color\": 15158332,
+                   \"fields\": [
+                     {\"name\": \"📝 커밋\", \"value\": \"\`${{ github.sha }}\`\", \"inline\": true},
+                     {\"name\": \"👤 작성자\", \"value\": \"${{ github.actor }}\", \"inline\": true}
+                   ]
+                 }]
+               }" \
+               ${{ secrets.DISCORD_WEBHOOK_URL }}
