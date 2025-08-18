@@ -1,3 +1,5 @@
+# 각 서비스 레포의 .github/workflows/ci.yml
+
 name: Build and Deploy to ECR
 
 on:
@@ -5,13 +7,13 @@ on:
     branches: [main, master]
 
 env:
-  AWS_REGION: ap-southeast-2
-  ECR_REPOSITORY: winter-cat
+  AWS_REGION: ap-southeast-2 # 시드니 리전
+  ECR_REPOSITORY: winter-cat # 고정된 ECR 레포 이름
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: production
+    environment: production # Environment secrets 사용
     outputs:
       image-tag: ${{ steps.tag.outputs.tag }}
       image-uri: ${{ steps.build.outputs.image-uri }}
@@ -50,19 +52,16 @@ jobs:
           IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           SERVICE_NAME: ${{ github.event.repository.name }}
         run: |
-          # Build a docker container and push it to ECR with namespace structure
-          FULL_IMAGE_NAME="$ECR_REGISTRY/$ECR_REPOSITORY/$SERVICE_NAME:$IMAGE_TAG"
-          LATEST_IMAGE_NAME="$ECR_REGISTRY/$ECR_REPOSITORY/$SERVICE_NAME:latest"
-
-          docker build -t $FULL_IMAGE_NAME .
-          docker push $FULL_IMAGE_NAME
+          # Build a docker container and push it to ECR
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$SERVICE_NAME-$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$SERVICE_NAME-$IMAGE_TAG
 
           # Tag as latest for each service
-          docker tag $FULL_IMAGE_NAME $LATEST_IMAGE_NAME
-          docker push $LATEST_IMAGE_NAME
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$SERVICE_NAME-$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$SERVICE_NAME-latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$SERVICE_NAME-latest
 
-          echo "image-uri=$FULL_IMAGE_NAME" >> $GITHUB_OUTPUT
-          echo "Image pushed: $FULL_IMAGE_NAME"
+          echo "image-uri=$ECR_REGISTRY/$ECR_REPOSITORY:$SERVICE_NAME-$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "Image pushed: $ECR_REGISTRY/$ECR_REPOSITORY:$SERVICE_NAME-$IMAGE_TAG"
 
   update-helm-chart:
     needs: build
@@ -92,26 +91,26 @@ jobs:
 
           SERVICE_NAME="${{ github.event.repository.name }}"
           NEW_TAG="${{ needs.build.outputs.image-tag }}"
-          NEW_REPOSITORY="${ECR_REGISTRY}/winter-cat/${SERVICE_NAME}"
+          NEW_REPOSITORY="${ECR_REGISTRY}/winter-cat"
 
           # values.yaml에서 해당 서비스의 repository와 tag 업데이트
           case $SERVICE_NAME in
             "discord-bot")
               sed -i "/discordBot:/,/pullPolicy:/ {
                 s|repository: .*|repository: ${NEW_REPOSITORY}|
-                s|tag: .*|tag: ${{ needs.build.outputs.image-tag }}|
+                s|tag: .*|tag: discord-bot-${{ needs.build.outputs.image-tag }}|
               }" values.yaml
               ;;
             "winter-cat-video")
               sed -i "/winterCatVideo:/,/pullPolicy:/ {
                 s|repository: .*|repository: ${NEW_REPOSITORY}|
-                s|tag: .*|tag: ${{ needs.build.outputs.image-tag }}|
+                s|tag: .*|tag: winter-cat-video-${{ needs.build.outputs.image-tag }}|
               }" values.yaml
               ;;
             "codex-media")
               sed -i "/codexMedia:/,/pullPolicy:/ {
                 s|repository: .*|repository: ${NEW_REPOSITORY}|
-                s|tag: .*|tag: ${{ needs.build.outputs.image-tag }}|
+                s|tag: .*|tag: codex-media-${{ needs.build.outputs.image-tag }}|
               }" values.yaml
               ;;
           esac
