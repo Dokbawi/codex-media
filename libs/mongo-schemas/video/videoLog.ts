@@ -1,7 +1,8 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { Document, Schema as MongooseSchema } from 'mongoose';
 
 @Schema({ timestamps: true })
-export class VideoLog extends Document {
+export class VideoLog {
   @Prop({ required: true, ref: 'Video', index: true })
   videoId: string;
 
@@ -24,14 +25,9 @@ export class VideoLog extends Document {
   @Prop({ default: () => new Date(), index: true })
   timestamp: Date;
 
-  @Prop()
+  @Prop({ type: MongooseSchema.Types.Mixed })
   metadata?: Record<string, any>;
 }
 
+export type VideoLogDocument = VideoLog & Document;
 export const VideoLogSchema = SchemaFactory.createForClass(VideoLog);
-
-// 복합 인덱스 추가
-VideoLogSchema.index({ videoId: 1, timestamp: -1 });
-VideoLogSchema.index({ videoId: 1, step: 1 });
-VideoLogSchema.index({ level: 1, timestamp: -1 });
-VideoLogSchema.index({ step: 1, timestamp: -1 });
