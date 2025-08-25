@@ -21,7 +21,8 @@ export class AwsS3Service {
 
   async uploadVideo(bucketName: string, localTempPath: string): Promise<string> {
     const timestamp = Date.now();
-    const fileName = `uploads/${timestamp}_processed_video.mp4`;
+    const dateStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const fileName = `temp/${dateStr}/${timestamp}_processed_video.mp4`; // temp 폴더에 날짜별 저장
     
     try {
       const fileContent = await fs.readFile(localTempPath);
@@ -42,9 +43,10 @@ export class AwsS3Service {
       });
 
       const signedUrl = await getSignedUrl(this.s3Client, getCommand, {
-        expiresIn: 10 * 60,
+        expiresIn: 2 * 60, // 2분 URL 유효
       });
 
+      // 1분 후 즉시 삭제 시도
       setTimeout(
         async () => {
           try {
@@ -52,9 +54,10 @@ export class AwsS3Service {
             this.logger.log(`S3 임시 파일 삭제 완료: ${fileName}`);
           } catch (deleteError) {
             this.logger.error(`S3 임시 파일 삭제 실패: ${deleteError.message}`);
+            // 실패해도 S3 Lifecycle에서 삭제됨
           }
         },
-        10 * 60 * 1000,
+        1 * 60 * 1000, // 1분
       );
 
       return signedUrl;

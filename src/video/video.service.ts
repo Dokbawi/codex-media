@@ -92,6 +92,25 @@ export class VideoService {
         videoId,
       );
 
+      // 파일 크기 로깅
+      try {
+        const outputStats = await fs.stat(localOutputTempPath);
+        const outputSizeMB = (outputStats.size / (1024 * 1024)).toFixed(2);
+        this.logger.log(`출력 파일 크기: ${outputSizeMB}MB - ${videoId}`);
+        
+        // 입력 파일 크기도 비교
+        const inputStats = await fs.stat(localTempPath);
+        const inputSizeMB = (inputStats.size / (1024 * 1024)).toFixed(2);
+        const sizeReduction = outputStats.size < inputStats.size;
+        const ratio = sizeReduction 
+          ? ((1 - outputStats.size / inputStats.size) * 100).toFixed(1)
+          : ((outputStats.size / inputStats.size - 1) * 100).toFixed(1);
+        const ratioText = sizeReduction ? `압축: ${ratio}%` : `증가: +${ratio}%`;
+        this.logger.log(`처리 결과: ${inputSizeMB}MB → ${outputSizeMB}MB (${ratioText})`);
+      } catch (err) {
+        this.logger.warn(`파일 크기 측정 실패: ${err.message}`);
+      }
+
       const bucketName = 'winter-cat-s3';
       const signedUrl = await this.awsS3Service.uploadVideo(
         bucketName,

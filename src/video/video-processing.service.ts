@@ -177,40 +177,64 @@ export class VideoProcessingService {
     maxVolume: number;
     meanVolume: number;
   }): string[] {
-    if (audioLevels && audioLevels.meanVolume < -20) {
-      const boostAmount = Math.min(-audioLevels.meanVolume - 12, 15); // 부스트 제한
-      return [
-        `volume=${boostAmount}dB`,
-        'afftdn=nr=15:nf=-35', // 노이즈 제거 간소화
-        'loudnorm=I=-16:TP=-1.5:LRA=11',
-      ];
+    const filters: string[] = [];
+
+    // 저주파 노이즈 제거 (안전하고 효과적)
+    filters.push('highpass=f=80');
+
+    // 음량이 너무 작은 경우 약간 부스트
+    if (audioLevels && audioLevels.meanVolume < -25) {
+      const boostAmount = Math.min(-audioLevels.meanVolume - 16, 10); // 더 보수적
+      filters.push(`volume=${boostAmount}dB`);
     }
 
-    // 기본 필터만 적용
-    return ['loudnorm=I=-16:TP=-1.5:LRA=11'];
+    // EBU R128 정규화 (1-Pass만 사용)
+    filters.push('loudnorm=I=-16:TP=-1.5:LRA=11');
+
+    // 간단한 다이내믹 압축 (배경음-목소리 균형)
+    filters.push(
+      'compand=attacks=0.5:decays=1.0:points=-80/-80|-20/-20|-10/-10|0/0',
+    );
+
+    return filters;
   }
 
   private calculateOptimalBitrate(
     duration: number,
     targetWidth: number,
     targetHeight: number,
+    inputSizeMB?: number,
   ): { videoBitrate: number; audioBitrate: string } {
+    // 목표: 입력 파일의 70% 크기 (더 공격적)
+    const targetPercent = 0.7; // 70%
+    const targetSizeMB = inputSizeMB ? inputSizeMB * targetPercent : 10;
+
+    // 목표 비트레이트 계산 (MB -> kbps)
+    const targetTotalKbps = (targetSizeMB * 8 * 1024) / duration;
+
     const pixelCount = targetWidth * targetHeight;
-
-    let videoBitrate: number;
     let audioBitrate: string;
+    let audioKbps: number;
 
-    // 간단한 룩업 테이블 방식
+    // 더 낮은 오디오 비트레이트 (압축 우선)
     if (pixelCount <= 640 * 480) {
-      videoBitrate = 600;
-      audioBitrate = '64k';
+      audioKbps = 48;
+      audioBitrate = '48k';
     } else if (pixelCount <= 1280 * 720) {
-      videoBitrate = duration > 600 ? 1000 : 1200;
-      audioBitrate = '80k';
+      audioKbps = 64;
+      audioBitrate = '64k';
     } else {
-      videoBitrate = duration > 600 ? 1500 : 1800;
-      audioBitrate = '96k';
+      audioKbps = 80;
+      audioBitrate = '80k';
     }
+
+    // 비디오 비트레이트 = 전체 - 오디오
+    let videoBitrate = Math.max(200, Math.floor(targetTotalKbps - audioKbps));
+
+    // 더 낮은 최대 비트레이트 (압축 우선)
+    const maxVideoBitrate =
+      pixelCount <= 640 * 480 ? 500 : pixelCount <= 1280 * 720 ? 800 : 1200;
+    videoBitrate = Math.min(videoBitrate, maxVideoBitrate);
 
     return { videoBitrate, audioBitrate };
   }
@@ -294,40 +318,55 @@ export class VideoProcessingService {
           duration,
         );
 
+      // 입력 파일 크기 가져오기
+      let inputSizeMB: number | undefined;
+      try {
+        const inputStats = await fs.stat(inputPath);
+        inputSizeMB = inputStats.size / (1024 * 1024);
+      } catch {
+        inputSizeMB = undefined;
+      }
+
       const { videoBitrate, audioBitrate } = this.calculateOptimalBitrate(
         duration,
         targetWidth,
         targetHeight,
+        inputSizeMB,
       );
 
-      // 단일 패스 인코딩
-      const command = ffmpeg(inputPath)
-        .videoCodec('libx264')
-        .videoBitrate(videoBitrate)
-        .addOptions([
-          '-preset',
-          'veryfast', // 더 빠른 preset
-          '-crf',
-          '28', // 품질 약간 낮춤 (속도 향상)
-          '-movflags',
-          '+faststart',
-          '-pix_fmt',
-          'yuv420p',
-        ]);
+      if (videoId) {
+        await this.saveVideoLog(
+          videoId,
+          'bitrate_calculation',
+          `입력: ${inputSizeMB?.toFixed(1)}MB, 목표: ${(inputSizeMB * 0.87)?.toFixed(1)}MB, 비디오: ${videoBitrate}kbps, 오디오: ${audioBitrate}`,
+        );
+      }
 
-      // 비디오 필터 (간소화)
+      // CRF 기반 인코딩 (크기 제어)
+      const command = ffmpeg(inputPath).videoCodec('libx264').addOptions([
+        '-preset',
+        'medium', // 품질-속도 균형
+        '-crf',
+        '32', // 더 높은 CRF = 더 작은 파일
+        '-movflags',
+        '+faststart',
+        '-pix_fmt',
+        'yuv420p',
+      ]);
+
+      // 기본 비디오 필터 (스케일링만)
       const videoFilters = [
         `scale=${targetWidth}:${targetHeight}:flags=lanczos`,
       ];
       command.videoFilters(videoFilters);
 
-      // 오디오 처리
+      // 오디오 처리 (고정 비트레이트)
       if (audioStream) {
         const audioFilters = this.generateAudioFilters(audioLevels);
         command
           .audioFilters(audioFilters)
           .audioCodec('aac')
-          .audioBitrate(audioBitrate);
+          .audioBitrate('96k');
       } else {
         command.noAudio();
       }
