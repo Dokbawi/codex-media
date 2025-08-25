@@ -3,7 +3,7 @@ import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
 import { join } from 'path';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { GcpStorageService } from '../gcp/gcp-storage.service';
+import { AwsS3Service } from '../aws/aws-s3.service';
 import { VideoUploadDto } from './dto/video-upload.dto';
 import axios from 'axios';
 import { VideoProcessingService } from './video-processing.service';
@@ -18,7 +18,7 @@ export class VideoService {
 
   constructor(
     private readonly amqpConnection: AmqpConnection,
-    private readonly gcpStorageService: GcpStorageService,
+    private readonly awsS3Service: AwsS3Service,
     private readonly videoProcessingService: VideoProcessingService,
     @InjectModel(Video.name) private videoModel: Model<Video>,
   ) {
@@ -42,7 +42,7 @@ export class VideoService {
   async handleVideoProcessRequest(msg: any) {
     this.logger.log(`영상 처리 요청: ${JSON.stringify(msg)}`);
 
-    const { callbackQueue, senderId, serverId, videoUrl, channelId } =
+    const { callbackQueue, uploaderId, serverId, originalVideoUrl, channelId } =
       msg.data as VideoUploadDto;
     let videoId: string | null = null;
     let localTempPath = '';
@@ -54,18 +54,24 @@ export class VideoService {
       processedFilePath: '',
       thumbnailFilePath: '',
       channelId,
+      serverId,
+      uploaderId,
+      duration: 0,
       error: '',
     };
 
     try {
-      if (!videoUrl?.trim() || !/^https?:\/\/.+/.test(videoUrl.trim())) {
+      if (
+        !originalVideoUrl?.trim() ||
+        !/^https?:\/\/.+/.test(originalVideoUrl.trim())
+      ) {
         throw new Error('유효하지 않은 비디오 URL');
       }
 
       const videoRecord = await this.videoModel.create({
         serverId,
-        uploaderId: senderId,
-        url: videoUrl.trim(),
+        uploaderId: uploaderId,
+        url: originalVideoUrl.trim(),
         status: 'pending',
       });
 
@@ -80,20 +86,46 @@ export class VideoService {
       );
 
       const [videoResponse] = await Promise.all([
-        this.downloadVideo(videoUrl.trim(), videoId),
+        this.downloadVideo(originalVideoUrl.trim(), videoId),
         this.videoProcessingService.updateVideoStatus(videoId, 'processing'),
       ]);
 
       await fs.writeFile(localTempPath, Buffer.from(videoResponse.data));
 
-      await this.videoProcessingService.upscaleVideo(
+      const processingResult = await this.videoProcessingService.upscaleVideo(
         localTempPath,
         localOutputTempPath,
         videoId,
       );
 
-      const bucketName = 'bucket-video-winter-cat';
-      const signedUrl = await this.gcpStorageService.uploadVideo(
+      // duration 업데이트
+      response.duration = Math.round(processingResult.duration || 0);
+
+      // 파일 크기 로깅
+      try {
+        const outputStats = await fs.stat(localOutputTempPath);
+        const outputSizeMB = (outputStats.size / (1024 * 1024)).toFixed(2);
+        this.logger.log(`출력 파일 크기: ${outputSizeMB}MB - ${videoId}`);
+
+        // 입력 파일 크기도 비교
+        const inputStats = await fs.stat(localTempPath);
+        const inputSizeMB = (inputStats.size / (1024 * 1024)).toFixed(2);
+        const sizeReduction = outputStats.size < inputStats.size;
+        const ratio = sizeReduction
+          ? ((1 - outputStats.size / inputStats.size) * 100).toFixed(1)
+          : ((outputStats.size / inputStats.size - 1) * 100).toFixed(1);
+        const ratioText = sizeReduction
+          ? `압축: ${ratio}%`
+          : `증가: +${ratio}%`;
+        this.logger.log(
+          `처리 결과: ${inputSizeMB}MB → ${outputSizeMB}MB (${ratioText})`,
+        );
+      } catch (err) {
+        this.logger.warn(`파일 크기 측정 실패: ${err.message}`);
+      }
+
+      const bucketName = 'winter-cat-s3';
+      const signedUrl = await this.awsS3Service.uploadVideo(
         bucketName,
         localOutputTempPath,
       );
@@ -131,7 +163,6 @@ export class VideoService {
       response.success = false;
     } finally {
       await this.cleanupFiles([localTempPath, localOutputTempPath]);
-
       this.amqpConnection.publish('video_exchange', callbackQueue, response);
     }
   }

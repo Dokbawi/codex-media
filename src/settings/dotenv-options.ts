@@ -21,3 +21,13 @@ export const mognoDBConfig = {
   password: process.env.MONGODB_ADMIN_PASSWORD,
   dbName: process.env.MONGODB_NAME,
 };
+
+export const mongoDB = {
+  url: () => {
+    return env !== 'production'
+      ? `mongodb://${mognoDBConfig.user}:${mognoDBConfig.password}@localhost:27017`
+      : process.env.MONGODB_URL;
+  },
+};
+
+console.log(mongoDB.url());

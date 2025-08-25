@@ -5,10 +5,10 @@ export class VideoUploadDto {
   serverId: string;
 
   @IsString()
-  senderId: string;
+  uploaderId: string;
 
   @IsString()
-  videoUrl: string;
+  originalVideoUrl: string;
 
   @IsString()
   channelId: string;
