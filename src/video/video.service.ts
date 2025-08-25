@@ -3,7 +3,7 @@ import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
 import { join } from 'path';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { GcpStorageService } from '../gcp/gcp-storage.service';
+import { AwsS3Service } from '../aws/aws-s3.service';
 import { VideoUploadDto } from './dto/video-upload.dto';
 import axios from 'axios';
 import { VideoProcessingService } from './video-processing.service';
@@ -18,7 +18,7 @@ export class VideoService {
 
   constructor(
     private readonly amqpConnection: AmqpConnection,
-    private readonly gcpStorageService: GcpStorageService,
+    private readonly awsS3Service: AwsS3Service,
     private readonly videoProcessingService: VideoProcessingService,
     @InjectModel(Video.name) private videoModel: Model<Video>,
   ) {
@@ -92,8 +92,8 @@ export class VideoService {
         videoId,
       );
 
-      const bucketName = 'bucket-video-winter-cat';
-      const signedUrl = await this.gcpStorageService.uploadVideo(
+      const bucketName = 'winter-cat-s3';
+      const signedUrl = await this.awsS3Service.uploadVideo(
         bucketName,
         localOutputTempPath,
       );

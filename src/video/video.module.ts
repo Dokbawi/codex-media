@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { VideoService } from './video.service';
 import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
-import { GcpStorageModule } from 'src/gcp/gcp-storage.module';
+import { AwsS3Module } from 'src/aws/aws-s3.module';
 import { VideoProcessingService } from './video-processing.service';
 import { rabbitMQConfig } from 'src/settings/dotenv-options';
 import { MongooseModule } from '@nestjs/mongoose';
@@ -33,7 +33,7 @@ import {
         enableControllerDiscovery: true,
       }),
     }),
-    GcpStorageModule,
+    AwsS3Module,
   ],
   providers: [VideoService, VideoProcessingService],
 })
